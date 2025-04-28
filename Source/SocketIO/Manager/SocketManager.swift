@@ -500,6 +500,16 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     private func _tryReconnect() {
         guard reconnects && reconnecting && status != .disconnected else { return }
 
+        var isAppActive = false
+        DispatchQueue.main.sync {
+            isAppActive = UIApplication.shared.applicationState == .active
+        }
+        guard isAppActive else { 
+            self.disconnect()
+            return
+        }
+        
+
         if reconnectAttempts != -1 && currentReconnectAttempt + 1 > reconnectAttempts {
             return didDisconnect(reason: "Reconnect Failed")
         }
