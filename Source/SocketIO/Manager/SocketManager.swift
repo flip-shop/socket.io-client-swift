@@ -103,6 +103,9 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
     /// The maximum number of seconds to wait before attempting to reconnect.
     public var reconnectWaitMax = 30
 
+    /// If 'true' reconnection try will only be attempted on UIApplication.State.active
+    public var reconnectOnlyOnActive = true
+
     /// The randomization factor for calculating reconnect jitter.
     public var randomizationFactor = 0.5
 
@@ -238,6 +241,7 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         DefaultSocketLogger.Logger.log("Manager closing", type: SocketManager.logType)
 
         status = .disconnected
+        _reconnectWorkItem?.cancel()
 
         engine?.disconnect(reason: "Disconnect")
     }
@@ -497,11 +501,23 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         _tryReconnect()
     }
 
+    private var _reconnectWorkItem: DispatchWorkItem?
     private func _tryReconnect() {
+        _reconnectWorkItem?.cancel()
         guard reconnects && reconnecting && status != .disconnected else { return }
 
         if reconnectAttempts != -1 && currentReconnectAttempt + 1 > reconnectAttempts {
             return didDisconnect(reason: "Reconnect Failed")
+        }
+
+        var applicationState = if Thread.isMainThread { UIApplication.shared.applicationState }
+        else { DispatchQueue.main.sync { UIApplication.shared.applicationState } }
+
+        switch (reconnectOnlyOnActive, applicationState) {
+        case (true, .background):
+            disconnect()
+            return
+        default: break
         }
 
         DefaultSocketLogger.Logger.log("Trying to reconnect", type: SocketManager.logType)
@@ -515,9 +531,11 @@ open class SocketManager: NSObject, SocketManagerSpec, SocketParsable, SocketDat
         currentReconnectAttempt += 1
         connect()
 
+        _reconnectWorkItem = DispatchWorkItem(block: _tryReconnect)
+        guard let _reconnectWorkItem else { return }
         let interval = reconnectInterval(attempts: currentReconnectAttempt)
         DefaultSocketLogger.Logger.log("Scheduling reconnect in \(interval)s", type: SocketManager.logType)
-        handleQueue.asyncAfter(deadline: .now() + interval, execute: _tryReconnect)
+        handleQueue.asyncAfter(deadline: .now() + interval, execute: _reconnectWorkItem)
     }
 
     func reconnectInterval(attempts: Int) -> Double {
